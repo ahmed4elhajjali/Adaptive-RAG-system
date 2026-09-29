@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Adaptive RAG Assistant</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #14161e; --surface: #1b1e29; --raised: #232736; --line: #2c3143;
+    --text: #e8eaf2; --muted: #8f95aa;
+    --node: #8fa3ff; --ok: #6fd3a1; --warn: #f0b35a; --bad: #ef7d86;
+    --font: "Schibsted Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 16px/1.55 var(--font); display: flex; flex-direction: column; }
+  header { padding: 20px 24px 12px; max-width: 780px; width: 100%; margin: 0 auto; }
+  header h1 { font-size: 1.35rem; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+  header p { margin: 4px 0 0; color: var(--muted); font-size: .95rem; }
+  main { flex: 1; overflow-y: auto; }
+  #thread { max-width: 780px; margin: 0 auto; padding: 8px 24px 24px; display: flex; flex-direction: column; gap: 18px; }
+  .empty { color: var(--muted); padding: 24px 0; }
+  .examples { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .examples button { background: var(--surface); color: var(--text); border: 1px solid var(--line); border-radius: 999px;
+    padding: 8px 14px; font: inherit; font-size: .9rem; cursor: pointer; }
+  .examples button:hover { border-color: var(--node); }
+  .q { align-self: flex-end; background: var(--raised); border-radius: 14px 14px 4px 14px; padding: 10px 14px; max-width: 85%; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; }
+  .path { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 0; margin-bottom: 12px; font-size: .82rem; }
+  .chip { background: var(--raised); color: var(--node); border: 1px solid var(--line); border-radius: 6px; padding: 2px 9px; }
+  .chip.web { color: var(--warn); }
+  .chip.live { border-color: var(--node); }
+  .join { width: 14px; height: 1px; background: var(--line); margin: 0 2px; }
+  .answer { white-space: pre-wrap; }
+  .pending { color: var(--muted); }
+  .badge { display: inline-block; margin-top: 12px; font-size: .82rem; padding: 2px 9px; border-radius: 6px; border: 1px solid; }
+  .badge.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
+  .badge.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+  .error { color: var(--bad); }
+  details { margin-top: 12px; color: var(--muted); font-size: .88rem; }
+  summary { cursor: pointer; color: var(--text); }
+  details ul { margin: 8px 0 0; padding-left: 18px; }
+  details li { margin-bottom: 4px; }
+  .steps { list-style: none; padding: 0; margin: 0 0 12px; color: var(--muted); font-size: .88rem; }
+  .steps li { margin-bottom: 2px; }
+  .steps b { color: var(--text); font-weight: 500; }
+  form { max-width: 780px; width: 100%; margin: 0 auto; padding: 12px 24px 24px; display: flex; gap: 10px; }
+  input { flex: 1; background: var(--surface); color: var(--text); border: 1px solid var(--line); border-radius: 12px;
+    padding: 12px 14px; font: inherit; }
+  input::placeholder { color: var(--muted); }
+  input:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px solid var(--node); outline-offset: 2px; }
+  .send { background: var(--node); color: #10131c; border: 0; border-radius: 12px; padding: 0 20px; font: inherit; font-weight: 600; cursor: pointer; }
+  .send:disabled { opacity: .5; cursor: progress; }
+  @media (max-width: 520px) { header, #thread, form { padding-left: 16px; padding-right: 16px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Adaptive RAG Assistant</h1>
+  <p>Routes each question to the local knowledge base or the web, grades what it finds, and checks its own answer.</p>
+</header>
+
+<main><div id="thread">
+  <div class="empty" id="empty">
+    Ask a question to see the path the workflow takes.
+    <div class="examples">
+      <button type="button">What is LangGraph?</button>
+      <button type="button">How does hallucination grading work?</button>
+      <button type="button">What is the latest stable Python version?</button>
+    </div>
+  </div>
+</div></main>
+
+<form id="form" autocomplete="off">
+  <input id="q" name="question" maxlength="1000" placeholder="Ask a question" aria-label="Question" required>
+  <button class="send" id="send" type="submit">Ask</button>
+</form>
+
+<script>
+const thread = document.getElementById("thread"), form = document.getElementById("form"),
+      input = document.getElementById("q"), send = document.getElementById("send");
+
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text) e.textContent = text; return e; };
+const scrollDown = () => document.querySelector("main").scrollTo({ top: 1e9, behavior: "smooth" });
+
+function renderPath(container, nodes, live) {
+  container.replaceChildren();
+  nodes.forEach((n, i) => {
+    if (i) container.append(el("span", "join"));
+    const c = el("span", "chip" + (n === "web_search" ? " web" : "") + (live && i === nodes.length - 1 ? " live" : ""), n);
+    container.append(c);
+  });
+}
+
+async function ask(question) {
+  document.getElementById("empty")?.remove();
+  thread.append(el("div", "q", question));
+  const card = el("div", "card"), path = el("div", "path"), steps = el("ul", "steps"), body = el("div", "pending", "Working on it…");
+  card.append(path, steps, body); thread.append(card); scrollDown();
+
+  const nodes = [];
+  send.disabled = true;
+  try {
+    const res = await fetch("/ask/stream", { method: "POST", headers: { "Content-Type": "application/json" },
+                                             body: JSON.stringify({ question }) });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "Request failed.");
+    const reader = res.body.getReader(), dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
+        if (line) handle(JSON.parse(line));
+      }
+    }
+  } catch (err) {
+    body.className = "error"; body.textContent = err.message;
+  } finally {
+    send.disabled = false; input.focus();
+  }
+
+  function handle(ev) {
+    if (ev.type === "step") {
+      nodes.push(ev.node); renderPath(path, nodes, true);
+      const li = el("li"); li.append(el("b", "", ev.node), document.createTextNode(" " + ev.detail)); steps.append(li);
+    } else if (ev.type === "final") {
+      renderPath(path, nodes, false); steps.remove();
+      body.className = "answer"; body.textContent = ev.answer || "No answer was produced.";
+      const ok = ev.grounded === "yes";
+      card.append(el("span", "badge " + (ok ? "ok" : "warn"),
+        ok ? "Supported by sources" : "Could not verify against sources"));
+      if (ev.sources.length) {
+        const d = el("details"), ul = el("ul");
+        d.append(el("summary", "", `Sources (${ev.sources.length}) · ${ev.attempts} attempt${ev.attempts === 1 ? "" : "s"}`));
+        ev.sources.forEach(s => { const li = el("li"); li.append(el("b", "", s.source), document.createTextNode(": " + s.snippet + "…")); ul.append(li); });
+        d.append(ul); card.append(d);
+      }
+    } else if (ev.type === "error") {
+      body.className = "error"; body.textContent = ev.message;
+    }
+    scrollDown();
+  }
+}
+
+form.addEventListener("submit", e => { e.preventDefault(); const q = input.value.trim(); if (!q) return; input.value = ""; ask(q); });
+document.querySelectorAll(".examples button").forEach(b => b.addEventListener("click", () => ask(b.textContent)));
+</script>
+</body>
+</html>

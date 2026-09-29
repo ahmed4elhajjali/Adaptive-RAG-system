@@ -1,0 +1,9 @@
+flask>=3.0
+python-dotenv>=1.0
+langgraph>=0.2.50
+langchain>=0.3
+langchain-core>=0.3
+langchain-openai>=0.2
+langchain-text-splitters>=0.3
+pydantic>=2.6
+tavily-python>=0.5   # optional: only used when TAVILY_API_KEY is set
